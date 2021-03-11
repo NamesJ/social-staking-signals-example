@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html lang="en" dir="ltr">
+  <head>
+    <meta charset="utf-8">
+    <title>Social Staking Signals Example</title>
+  </head>
+  <body>
+    <div>
+      <h4>Alice</h4>
+      <p>Balance: <span id="alice-balance">0</span> HDH</p>
+    </div>
+
+    <div>
+      <h4>Bobby</h4>
+      <p>Balance: <span id="bobby-balance">0</span> HDH</p>
+    </div>
+
+
+    <script type="text/javascript">
+      // User class
+      class User {
+      	constructor(username) {
+        	this.STAKEE_EARN_FACTOR = 0.01;
+          this.STAKEE_LOSS_FACTOR = 0.01;
+
+        	this.username = username;
+        	this.balance = 0;
+          this.subscribers = { // subscriber callbacks by signal name
+          	'hdh-earn': [],	// called when this user directly earns HDH
+            'hdh-lose': [],	// called when this user directly loses HDH
+            'hdh-earn-stake': [],	// called when this user earns HDH due to staking
+            'hdh-loss-stake': [],	// called when this user loses HDH due to staking
+          };
+          this.staked = []; // [ { 'stakee': User.username, 'amount': int } ]
+        }
+
+        // emits signal to subscribers by making a call to their provided callback method
+        async emit(signal_name, data, message) {
+        	console.log(`${this.username}.emit(): ${message}`);
+
+          if (Array.isArray(this.subscribers[signal_name]) == false) {
+          	console.log('No signal named ' + signal_name + ' found');
+          }
+
+          for (let i=0; i<this.subscribers[signal_name].length; i++) {
+            let cb = this.subscribers[signal_name][i];
+            cb(signal_name, data, message);
+          }
+        }
+
+        // subscribers use this function subscribe to signals of this user
+        async subscribe(signal_name, cb) {
+        	console.log(`${this.username}.subscribe(${signal_name})`);
+        	if (this.subscribers[signal_name]  === undefined) {
+          	console.log('subscription atempted for undefined signal ${signal_name}');
+          }
+
+          this.subscribers[signal_name].push(cb);
+        }
+
+        // event called when user earns HDH
+        async onEarnHDH(amount) {
+        	console.log(`${this.username}.onEarnHDH(${amount})`);
+        	this.balance += amount;
+
+          var data = {
+          	'username': this.username,
+          	'amount': amount
+           };
+          var msg = this.username + ' earned ' + amount + ' HDH';
+
+          this.emit('hdh-earn', data, msg);
+        }
+
+        // event called when user loses HDH
+        async onLoseHDH(amount) {
+        	console.log(`${this.username}.onLoseHDH(${amount})`);
+        	this.balance -= amount;
+
+          var data = {
+          	'username': this.username,
+          	'amount': amount
+           };
+          var msg = this.username + ' lost ' + amount + ' HDH';
+
+          this.emit('hdh-lose', data, msg);
+        }
+
+        // called for this user to stake in another user
+        async stake(user, amount) {
+        	console.log(`${this.username}.stake(${user}, ${amount})`);
+
+          if (this.balance < amount) {
+          	console.log(this.username + ' tried to stake more than they had.');
+            return;
+          }
+
+        	this.balance -= amount;
+
+        	user.subscribe('hdh-earn', this.onStakeeEarnHDH.bind(this) );
+          user.subscribe('hdh-lose', this.onStakeeLoseHDH.bind(this) );
+
+          this.subscribe('hdh-earn-stake', user.onStakerEarnHDH.bind(user) );
+          this.subscribe('hdh-lose-stake', user.onStakerLoseHDH.bind(user) );
+
+          this.staked[user.username] = amount;
+        }
+
+        // called for this user to unstake in another user
+        async unstake(username) {
+        	if (this.staked[user] == undefined) {
+          	console.log(`${this.username} is not staked in ${username}`);
+            return;
+          }
+
+          var staked_amount = this.staked[username];
+          var recovered_stake_amount = staked_amount * this.STAKE_RECOVERY_FACTOR*staked_amount;
+
+          this.balance += recovered_stake_amount;
+
+          delete this.staked[username];
+        }
+
+        // callback for when a stakee earns HDH
+        async onStakeeEarnHDH(signal_name, data, message) {
+        	console.log(`${this.username}.onStakeeEarnHDH(): ${message}`);
+
+       		var staked_amt = this.staked[data.username];
+          var staked_earnings = Math.floor(this.STAKEE_EARN_FACTOR*staked_amt*data.amount);
+          this.balance += staked_earnings;
+
+          var data = {
+          	'username': data.username,
+          	'amount': staked_earnings,
+          };
+          var msg = this.username + ' earned ' + data.amount + ' HDH from their stake in you.'
+
+          this.emit('hdh-earn-stake', data, msg);
+        }
+
+        // callback for when a stakee loses HDH
+        async onStakeeLoseHDH(signal_name, data, message) {
+        	console.log(`${this.username}.onStakeeLoseHDH(): ${message}`);
+
+          var staked_amt = this.staked[data.username];
+          var staked_loss = Math.floor(this.STAKEE_EARN_FACTOR*staked_amt*data.amount);
+          var staked_remaining = staked_amt - staked_loss;
+
+          if (staked_remaining <= 0) {
+          	this.staked[data.username] = 0;
+          	this.unstake(data.username);
+          } else {
+          	this.staked[data.username] = staked_remaining;
+          }
+
+          var data = {
+          	'username': data.username,
+          	'amount': staked_loss,
+          };
+          var msg = this.username + ' lost ' + data.amount + ' HDH from their stake in you.'
+
+          this.emit('hdh-lose-stake', data, msg)
+        }
+
+        // callback for when someone that is staked in this user earns some staking rewards
+        async onStakerEarnHDH(signal_name, data, message) {
+        	console.log(`${this.username}.onStakerEarnHDH(): ${message}`);
+
+          // If the staker earned HDH by staking in this user, then this user also
+          // receives additional HDH
+          if (data.username == this.username) {
+          	this.balance += data.amount;
+          }
+        }
+
+          // callback for when someone that is staked in this user earns some staking rewards
+        async onStakerLoseHDH(signal_name, data, message) {
+          console.log(`${this.username}.onStakerLoseHDH(): ${message}`);
+
+      		// If the staker earned HDH by staking in this user, then this user also
+          // receives additional HDH
+          if (data.username == this.username) {
+            this.balance -= data.amount;
+          }
+        }
+
+        printBalance() {
+        	console.log(this.username + ' balance: ' + this.balance)
+        }
+
+        printStaked() {
+        	var s = this.username + ' staked:';
+
+          for (const username in this.staked) {
+        		s += `\n  ${username}: ${this.staked[username]}`;
+      		}
+
+          console.log(s);
+        }
+
+      }
+
+
+
+      function showBalance(user) {
+      	let elem = document.getElementById(user.username + '-balance');
+        elem.innerText = user.balance;
+      }
+
+
+
+      window.onload = function() {
+
+      	let alice = new User('alice');
+        alice.printBalance();
+        showBalance(alice);
+
+        let bobby = new User('bobby');
+        bobby.printBalance();
+
+        // bobby earns 200 HDH
+        bobby.onEarnHDH(200);
+        bobby.printBalance();
+
+        // bobby stakes 100 HDH in alice
+        bobby.stake(alice, 100);
+        bobby.printStaked();
+        bobby.printBalance();
+
+        // alice earns 50 HDH directly
+        // and because bobby staked 100 HDH,
+        // and the stakee earning factor is 1%
+        // bobby will also earn 0.01*100*50 = 50 HDH
+        // which the bobby user object will be signal about
+        alice.onEarnHDH(50);
+        alice.printBalance();
+        bobby.printBalance();
+
+        // alice loses 90 HDH directly
+        // and becuase bobby is staked in alice
+        // bobby will lose a proportional amount
+        // from their staked amount 100-90=10
+        // and alice will lose the same from
+        // their balance 100-90=10
+        alice.onLoseHDH(90);
+        alice.printBalance();
+        bobby.printBalance();
+        bobby.printStaked();
+
+        // similar, except now alice's loss
+        // will be greater than BOTH
+        // the balance of her account
+        // AND the remaining amount of
+        // bobby's stake in alice
+        alice.onLoseHDH(100);
+        alice.printBalance();
+        bobby.printBalance();
+        bobby.printStaked();
+
+
+        showBalance(alice);
+        showBalance(bobby);
+      }
+    </script>
+  </body>
+</html>
